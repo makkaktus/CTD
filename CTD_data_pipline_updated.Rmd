@@ -1,0 +1,117 @@
+---
+title: "CTD_data_pipline"
+author: "Adam Makatun"
+date: "2025-01-21"
+output: html_document
+---
+# Extracting the data from sea&sun technology CTD probe
+
+### input file -> the csv created in SSDA sea&sun app
+### libraies
+```{r,echo=FALSE}
+library(readxl)
+library(oce)
+library(dplyr)
+library(readr)
+library(tidyverse)
+```
+
+1st step - set working directory -> path to the file with CTD data (many CSV files possible)
+```{r}
+setwd("F:/rejsy_ctd/ctd") # windows example 
+```
+
+2nd step - create file list and bind the data together
+```{r}
+#setwd("C:/Users/adamm/Documents/Doktorat/Praca/OneDrive - University of Gdansk/R_codes")
+setwd("F:/rejsy_ctd/ctd")
+
+# List all the CSV files in your working directory
+file_list <- list.files("F:/rejsy_ctd/ctd", pattern = "\\.csv$", ignore.case = TRUE, full.names = TRUE)
+
+
+# Initialize an empty dataframe to store combined data
+CTD_data <- data.frame()
+
+# Loop through each file in the file list
+for (file in file_list) {
+  
+  # Read the entire file as plain text
+  raw_data <- readLines(file)
+  
+  # Step 1: Extract the header row (line 29)
+  header_row <- raw_data[29]
+  
+  # Clean up the header row (replace multiple spaces with a single comma)
+  header_row <- gsub(" +", ",", header_row)
+  
+  # Convert header string to a vector
+  header <- unlist(strsplit(header_row, ","))
+  header <- header[-1]
+
+  
+  # Step 2: Read the data starting from line 32
+  data <- read.csv(file, 
+                   skip = 31,        # Skip first 31 lines
+                   header = FALSE,   # No need for auto header
+                   col.names = header) # Use extracted header
+  
+  # Add a new column with the filename only (without directory or .csv extension)
+  data$station <- tools::file_path_sans_ext(basename(file))
+  
+  
+  # Append the data to the combined dataframe
+  CTD_data <- bind_rows(CTD_data, data)
+}
+#CTD_data$station <- sub("(_[^_]+).*", "\\1", CTD_data$station)#leave only the first part of the name (cut the "_CTD.csv") - works only for the following naming;;; without this line, the variable "CTD_data$station" will be filled with the name of corresponding CSV file
+
+# Display the first few rows of the combined dataframe
+head(CTD_data)
+```
+
+3rd step - cuting outliers -> data gathered above the sea surface, data gathered while probe was stopped at the maximal dapth and data gathered while submerging. The final data is the one gathered while pulling up the probe
+&
+ploting a T&S depth profile
+example for single station data (extracted from multi station dataframe created in 2nd step)
+```{r}
+ctd1 <- CTD_data %>% filter(grepl("2410M1_CTD", station)) #extracting data for 1 station
+ctd1_celeaned <- ctd1 %>% filter(Press >= 0.45) #removing the data from above the surface (assumption <- 0.45 m is a border)
+
+ctd1_celeaned <- ctd1_celeaned %>% filter(Press <= (max(ctd1_celeaned$Press)-0.5)) #cutting the data from the deepest depth (depth_max-0.5 m as a buffor zone)
+
+ctd1_celeaned <- ctd1_celeaned[(which.max(ctd1_celeaned$Press) + 1):nrow(ctd1_celeaned),] #cuting the part when the probe was going down; result ia a data from the deepest to the shallowest
+
+#scaling for the second scale on the plot (temp & sal vs depth)
+#scale_factor <- max(ctd1_celeaned$Temp) / max(ctd1_celeaned$SALIN)
+#plot of the profile
+ ggplot(ctd1_celeaned,aes(colour=colour))+
+  geom_point(aes(x=Temp,y=Press,colour="Temp"))+
+  geom_point(aes(x=SALIN,y=Press,colour="Salin"))+#*scale_factor
+  geom_point(aes(x=Chl_A,y=Press,colour="Chl_A"))+
+  geom_point(aes(x=DO_mg,y=Press,colour="DO"))+
+  scale_color_manual(name="parameter",values=c("Temp"="red","Salin"="blue","Chl_A"="darkgreen","DO"="black"))+
+  scale_x_continuous(name="")+#,sec.axis = sec_axis(~./scale_factor, name="Salinity"),)+
+  scale_y_reverse()+
+  theme(
+    #axis.title.x.bottom = element_text(color = "red"),
+    #axis.title.x.top = element_text(color = "blue")
+  )
+#ggsave("2411M1.png",plot)
+
+```
+
+4th step - creating a whole water column summary of the data - mean values of temperature, salinity, Chl a concentration and dissolved oxygen [mg/l] for each station
+```{r,echo=F}
+ctd_summary <- data.frame()
+ctd_sum <- data_frame(station = character(), meanT = numeric(), meanS = numeric(), meanChl_A = numeric(), meanDO_mg = numeric())
+
+for(i in unique(CTD_data$station)){
+  ctd <- CTD_data %>% filter(grepl(i, station)) #extracting data for 1 station
+  ctd <- ctd %>% filter(Press >= 0.45) #removing the data from above the surface (assumption <- 0.45 m is a border)
+  ctd <- ctd %>% filter(Press <= (max(ctd$Press)-0.5)) #cutting the data from the deepest depth (depth_max-0.5 m as a buffor zone)
+  ctd <- ctd[(which.max(ctd$Press) + 1):nrow(ctd),] #cuting the part when the probe was going down; result is a data from the deep to the shallow
+  ctd_sum <- bind_rows(ctd_sum, data.frame(station = i, meanT = mean(ctd$Temp), meanS = mean(ctd$SALIN), meanChl_A = mean(ctd$Chl_A), meanDO_mg = mean(ctd$DO_mg))) #bnding the means together
+}
+
+ctd_sum
+```
